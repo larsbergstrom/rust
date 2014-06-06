@@ -3,16 +3,14 @@
 # it treats unknown languages as ruby-like I believe.
 language: c
 
+os:
+- linux
+- osx
+
 # Before we start doing anything, install a stock LLVM
 install:
-  - sudo sh -c "echo 'deb http://llvm.org/apt/precise/ llvm-toolchain-precise-3.4 main' >> /etc/apt/sources.list"
-  - sudo sh -c "echo 'deb http://llvm.org/apt/precise/ llvm-toolchain-precise main' >> /etc/apt/sources.list"
-  - sudo sh -c "echo 'deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu precise main' >> /etc/apt/sources.list"
-  - wget -O - http://llvm.org/apt/llvm-snapshot.gpg.key | sudo apt-key add -
-  - sudo apt-get update -qq
-  - sudo apt-get install -qq --force-yes -y llvm-$LLVM_VERSION
-    llvm-${LLVM_VERSION}-dev clang-$LLVM_VERSION lldb-$LLVM_VERSION
-
+  - if [ "${TRAVIS_OS_NAME}" = "linux" ]; then  ./travis.linux.install.deps.sh; fi
+  - if [ "${TRAVIS_OS_NAME}" = "osx" ]; then ./travis.osx.install.deps.sh; fi
 
 # All of the llvm tools are suffixed with "-$VERS" which we don't want, so
 # symlink them all into a local directory and just use that
@@ -20,35 +18,17 @@ install:
 # FIXME: this shouldn't update the src/llvm sub-repo, that takes about a minute
 #        it's gotta download so much stuff.
 before_script:
-  - mkdir -p local-llvm/bin
-  - ln -nsf /usr/bin/llvm-config-$LLVM_VERSION local-llvm/bin/llvm-config
-  - ln -nsf /usr/bin/llvm-mc-$LLVM_VERSION local-llvm/bin/llvm-mc
-  - ln -nsf /usr/bin/llvm-as-$LLVM_VERSION local-llvm/bin/llvm-as
-  - ln -nsf /usr/bin/llvm-dis-$LLVM_VERSION local-llvm/bin/llvm-dis
-  - ln -nsf /usr/bin/llc-$LLVM_VERSION local-llvm/bin/llc
-  - ln -nsf /usr/include/llvm-$LLVM_VERSION local-llvm/include
-  - ./configure --disable-optimize-tests --llvm-root=`pwd`/local-llvm --enable-fast-make --enable-clang
+  - if [ "${TRAVIS_OS_NAME}" = "linux" ]; then  ./travis.linux.before_script.sh; fi
+  - if [ "${TRAVIS_OS_NAME}" = "osx" ]; then ./travis.osx.before_script.sh; fi
+  - export NO_BENCH=1
+  - export RUST_SHA=`git rev-parse HEAD^`
 
-# Tidy everything up first, then build a few things, and then run a few tests.
-# Note that this is meant to run in a "fairly small" amount of time, so this
-# isn't exhaustive at all.
-#
-# As a result of https://github.com/travis-ci/travis-ci/issues/1066, we run
-# everything in one large command instead of multiple commands.
-script: |
-  if [[ $TRAVIS_PULL_REQUEST != 'false' ]]; then
-    if [[ $LLVM_VERSION != '3.4' ]]; then exit 0; fi
-  fi &&
-  make tidy &&
-  make -j4 rustc-stage1 &&
-  make check-stage1-std check-stage1-rpass check-stage1-cfail check-stage1-rfail check-stage1-doc
+script:
+  - travis_wait make -j4 rustc-stage1
+  - travis_wait make -j4 rustc-stage2
+  - make -j4 dist
 
-env:
-  global:
-    - NO_BENCH=1
-  matrix:
-    - LLVM_VERSION=3.3
-    - LLVM_VERSION=3.4
+env: LLVM_VERSION=3.5
 
 # We track this ourselves, and in theory we don't have to update the LLVM repo
 # (but sadly we do right now anyway).
@@ -60,4 +40,22 @@ notifications:
 
 branches:
   only:
-    - master
+  - travis
+
+after_success:
+- ls
+- if [ "${TRAVIS_OS_NAME}" = "linux" ]; then ls x86_64-unknown-linux-gnu; fi
+- if [ "${TRAVIS_OS_NAME}" = "osx" ]; then ls x86_64-apple-darwin; fi
+- ls dist
+
+deploy:
+  provider: s3
+  access_key_id: AKIAIN2TFNMLB7CJFXDA
+  secret_access_key:
+    secure: VKmt9KkBSu9uq05hffhZtLGw/vJ8DYVQsl6z92HZzNjT2g3H3OFoIOVG9i7TVzZJxDbA/cIsV5E3WoQvamMmuSNli0rZMzx9RXJK249O0UlFe3FDMEt86REyEy2Rwz8MhSnW0Vfygs+HvUFADCHA9n8ySKnl2CYG7qdpnDtZ1Xs=
+  bucket: servo-rust
+  local-dir: dist
+  skip_cleanup: true
+  upload-dir: $RUST_SHA
+  on:
+    branch: travis
